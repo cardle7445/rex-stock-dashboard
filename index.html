@@ -7,51 +7,156 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap');
         body { font-family: 'Inter', sans-serif; }
         .title-font { font-family: 'Space Grotesk', sans-serif; }
+        .dashboard-card { transition: all 0.3s; }
+        .dashboard-card:hover { transform: translateY(-4px); }
+        .green { color: #22c55e; }
+        .red { color: #ef4444; }
     </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100">
-    <!-- 你的儀表板內容（保持不變） -->
-    <div class="max-w-screen-2xl mx-auto p-8">
-        <h1 class="text-5xl">早安，Rex！</h1>
-        <p>正在載入即時資料...</p>
-        
-        <button onclick="refreshAllData()" class="mt-8 bg-blue-600 px-6 py-3 rounded-xl">手動刷新</button>
+    <div class="max-w-screen-2xl mx-auto">
+        <!-- 導航 -->
+        <nav class="bg-black border-b border-zinc-800 px-8 py-5 flex items-center justify-between sticky top-0 z-50">
+            <div class="flex items-center gap-x-3">
+                <div class="w-9 h-9 bg-[#00d4ff] rounded-2xl flex items-center justify-center text-black font-bold text-2xl">📈</div>
+                <h1 class="title-font text-3xl tracking-tighter">美股雷達</h1>
+                <span class="text-xs bg-emerald-400 text-black px-2.5 py-0.5 rounded-full">Rex 即時版</span>
+            </div>
+            <div class="flex gap-x-8 text-sm">
+                <a onclick="navigateTo(0)" class="hover:text-[#00d4ff] cursor-pointer">儀表板</a>
+                <a onclick="navigateTo(1)" class="hover:text-[#00d4ff] cursor-pointer">我的持股</a>
+            </div>
+            <button onclick="refreshAllData()" class="bg-white text-black px-5 py-2 rounded-3xl flex items-center gap-x-2 hover:bg-[#00d4ff]">
+                <i class="fa-solid fa-rotate"></i> 刷新資料
+            </button>
+        </nav>
+
+        <!-- 主頁面 -->
+        <div id="page-0" class="p-8">
+            <h2 class="text-5xl title-font mb-1">早安，Rex！</h2>
+            <p class="text-zinc-400 mb-8" id="status">正在載入即時市場資料...</p>
+
+            <!-- 指數 -->
+            <div class="grid grid-cols-4 gap-4 mb-12" id="indices-grid"></div>
+
+            <!-- 暴跌股票 -->
+            <div class="mb-12">
+                <h3 class="text-2xl font-semibold mb-4 flex items-center gap-x-3"><i class="fa-solid fa-triangle-exclamation text-red-500"></i>今日暴跌股票</h3>
+                <div class="bg-zinc-900 rounded-3xl p-6" id="plunge-container">
+                    <p class="text-zinc-400">載入中...</p>
+                </div>
+            </div>
+
+            <!-- 快速查詢 -->
+            <div class="grid grid-cols-2 gap-8">
+                <div class="bg-zinc-900 rounded-3xl p-8">
+                    <h4 class="mb-4">快速查詢股票</h4>
+                    <div class="flex gap-3">
+                        <input id="quick-ticker" value="NVDA" class="flex-1 bg-black border border-zinc-700 rounded-3xl px-6 py-4 outline-none text-lg">
+                        <button onclick="lookupStock()" class="bg-[#00d4ff] text-black px-10 rounded-3xl font-medium">查詢</button>
+                    </div>
+                    <div id="stock-detail" class="mt-6"></div>
+                </div>
+
+                <div class="bg-zinc-900 rounded-3xl p-8">
+                    <h4 class="mb-4">我的持股總覽</h4>
+                    <p class="text-zinc-400">持股功能使用本地儲存（後續可升級）</p>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
-        // === 重要：這裡改用 VITE_API_KEY ===
-        const API_KEY = 'YOUR_API_KEY_HERE';   // ← 先手動測試用，之後會被替換
+        // ==================== API 配置 ====================
+        let API_KEY = '';
+
+        // Vercel Environment Variable 讀取（推薦使用 VITE_ 前綴）
+        if (typeof import !== 'undefined' && import.meta && import.meta.env) {
+            API_KEY = import.meta.env.VITE_API_KEY || import.meta.env.API_KEY;
+        } else {
+            // 本地或 Vercel 靜態 HTML 測試用（部署後建議移除）
+            API_KEY = ''; // ← 這裡留空，改用 Vercel Environment Variables
+        }
+
+        const BASE_URL = 'https://api.polygon.io';
 
         async function apiCall(endpoint) {
-            const url = `https://api.polygon.io${endpoint}${endpoint.includes('?') ? '&' : '?'}apiKey=${API_KEY}`;
+            if (!API_KEY) {
+                document.getElementById('status').innerHTML = 
+                    `❌ <span class="text-red-400">API_KEY 未設定！</span><br>請在 Vercel Settings → Environment Variables 新增 <b>VITE_API_KEY</b>`;
+                return null;
+            }
+
+            const url = `${BASE_URL}${endpoint}${endpoint.includes('?') ? '&' : '?'}apiKey=${API_KEY}`;
             const res = await fetch(url);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return await res.json();
         }
 
+        // ==================== 主要功能 ====================
         async function updateMarket() {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = '正在取得即時資料...';
+
             try {
-                const tickers = 'SPX,IXIC,DJI,NVDA,AAPL,MSFT';
-                const data = await apiCall(`/v2/snapshot/locale/us/markets/stocks/tickers?tickers=${tickers}`);
-                console.log("✅ 成功取得資料", data);
-                alert("✅ API 連接成功！資料已載入（請看控制台）");
-            } catch(e) {
+                // 取得指數與重點股
+                const tickers = 'SPX,IXIC,DJI,NVDA,AAPL,MSFT,TSLA';
+                const snap = await apiCall(`/v2/snapshot/locale/us/markets/stocks/tickers?tickers=${tickers}`);
+
+                if (snap && snap.tickers) {
+                    renderIndices(snap.tickers);
+                }
+
+                // 暴跌股票
+                const losers = await apiCall('/v2/snapshot/locale/us/markets/stocks/losers?limit=10');
+                if (losers && losers.tickers) {
+                    renderPlunge(losers.tickers);
+                }
+
+                statusEl.innerHTML = `✅ <span class="text-emerald-400">資料更新成功 • ${new Date().toLocaleTimeString('zh-TW')}</span>`;
+            } catch (e) {
                 console.error(e);
-                alert("❌ API 失敗，請確認 Key 正確");
+                statusEl.innerHTML = `❌ 資料載入失敗，請確認 Polygon API Key 是否正確`;
             }
         }
 
-        function refreshAllData() {
-            updateMarket();
+        function renderIndices(tickers) {
+            const container = document.getElementById('indices-grid');
+            let html = '';
+            tickers.forEach(t => {
+                const change = t.todaysChangePerc || 0;
+                const price = t.lastTrade?.p?.toFixed(2) || t.lastQuote?.P?.toFixed(2) || '-';
+                html += `
+                <div class="dashboard-card bg-zinc-900 rounded-3xl p-6">
+                    <div class="text-sm text-zinc-400">${t.ticker}</div>
+                    <div class="text-3xl font-semibold mt-1">${price}</div>
+                    <div class="${change >= 0 ? 'green' : 'red'} text-xl font-medium">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</div>
+                </div>`;
+            });
+            container.innerHTML = html;
         }
 
-        window.onload = () => {
-            if (API_KEY === 'YOUR_API_KEY_HERE') {
-                alert("請先在程式碼中填入 API Key 測試");
-            }
-            updateMarket();
-        };
-    </script>
-</body>
-</html>
+        function renderPlunge(tickers) {
+            let html = `<table class="w-full"><thead><tr class="text-red-400"><th class="text-left py-3">股票</th><th class="text-right">跌幅</th></tr></thead><tbody>`;
+            tickers.slice(0, 8).forEach(t => {
+                const chg = t.todaysChangePerc || 0;
+                html += `<tr class="border-t border-zinc-800"><td class="py-3">${t.ticker}</td><td class="text-right text-red-500 font-semibold">${chg.toFixed(1)}%</td></tr>`;
+            });
+            html += `</tbody></table>`;
+            document.getElementById('plunge-container').innerHTML = html;
+        }
+
+        async function lookupStock() {
+            const ticker = document.getElementById('quick-ticker').value.toUpperCase().trim();
+            if (!ticker) return;
+            try {
+                const data = await apiCall(`/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}`);
+                const t = data.ticker;
+                const price = t.lastTrade?.p || '-';
+                const chg = t.todaysChangePerc || 0;
+                document.getElementById('stock-detail').innerHTML = `
+                    <div class="bg-black rounded-3xl p-8 mt-4">
+                        <div class="text-5xl font-bold">${ticker} <span class="${chg>=0?'green':'red'}">(${chg.toFixed(2)}%)</
